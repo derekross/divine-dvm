@@ -3,10 +3,14 @@ What's Hot on diVine - DVM Task
 
 This task queries wss://relay.divine.video for trending short-form videos
 using NIP-50 search with sort:hot parameter.
+
+Features:
+- Background caching: Videos are fetched every 3 minutes and kept in memory
+- Fast responses: Requests are served from cache, no relay wait time
+- Automatic refresh: Cache is updated via nostrdvm's schedule() mechanism
 """
 
 import json
-import asyncio
 from datetime import timedelta
 from typing import Optional
 
@@ -57,11 +61,19 @@ class DiscoverHotVideos(DVMTaskInterface):
 
     This queries the divine relay with search: "sort:hot" to get
     videos ranked by recency and engagement.
+
+    Uses nostrdvm's schedule() mechanism to cache results every 3 minutes
+    for instant response times.
     """
 
     KIND: Kind = EventDefinitions.KIND_NIP90_CONTENT_DISCOVERY
     TASK: str = "discover-content"
     FIX_COST: float = 0
+
+    # Instance variables for caching
+    last_schedule: int = 0
+    cached_result: str = ""
+    request_form: dict = None
 
     def __init__(
         self,
@@ -72,6 +84,14 @@ class DiscoverHotVideos(DVMTaskInterface):
         admin_config: Optional[dict] = None,
         options: Optional[dict] = None,
     ):
+        # Initialize instance variables BEFORE super().__init__() because
+        # the parent calls init_dvm() which needs these values
+        self.max_results = 50  # Cache more than we typically return
+        self.relay_url = DIVINE_RELAY
+        self.last_schedule = 0
+        self.cached_result = ""
+        self.request_form = {"jobID": "cache_refresh", "max_results": 50}
+
         super().__init__(
             name=name,
             dvm_config=dvm_config,
@@ -80,8 +100,6 @@ class DiscoverHotVideos(DVMTaskInterface):
             admin_config=admin_config,
             options=options,
         )
-        self.max_results = 20
-        self.relay_url = DIVINE_RELAY
 
     async def init_dvm(
         self,
@@ -100,6 +118,13 @@ class DiscoverHotVideos(DVMTaskInterface):
                 self.max_results = int(options["max_results"])
             if "relay_url" in options:
                 self.relay_url = options["relay_url"]
+
+        # Initialize timestamp
+        self.last_schedule = Timestamp.now().as_secs()
+
+        # Pre-fetch initial cache
+        print(f"[{name}] Pre-fetching initial video cache...")
+        self.cached_result = await self._calculate_result(self.request_form)
 
     async def is_input_supported(self, tags: list, client: Client, dvm_config: DVMConfig) -> bool:
         """
@@ -143,10 +168,47 @@ class DiscoverHotVideos(DVMTaskInterface):
 
     async def process(self, request_form: dict) -> str:
         """
-        Process the job request by querying divine relay for hot videos.
+        Process the job request - returns cached results for instant response.
 
-        Uses NIP-50 search parameter to get videos sorted by "hot" algorithm.
-        Returns a JSON array of addressable event tags.
+        Results are pre-computed by the schedule() method every 3 minutes.
+        This method just slices the cached results to the requested max_results.
+        """
+        max_results = request_form.get("max_results", 20)
+
+        # If we have cached results, use them (fast path)
+        if self.cached_result:
+            try:
+                all_results = json.loads(self.cached_result)
+                sliced_results = all_results[:max_results]
+                return json.dumps(sliced_results)
+            except json.JSONDecodeError:
+                pass
+
+        # Fallback: calculate fresh results if cache is empty
+        return await self._calculate_result(request_form)
+
+    async def schedule(self, dvm_config: DVMConfig):
+        """
+        Scheduled task that refreshes the video cache periodically.
+
+        Called by nostrdvm framework based on SCHEDULE_UPDATES_SECONDS config.
+        """
+        if dvm_config.SCHEDULE_UPDATES_SECONDS == 0:
+            return 0
+
+        now = Timestamp.now().as_secs()
+        if now >= self.last_schedule + dvm_config.SCHEDULE_UPDATES_SECONDS:
+            print(f"[{dvm_config.NIP89.NAME}] Refreshing video cache...")
+            self.last_schedule = now
+            self.cached_result = await self._calculate_result(self.request_form)
+            return 1
+        return 0
+
+    async def _calculate_result(self, request_form: dict) -> str:
+        """
+        Calculate fresh results by querying the divine relay.
+
+        Returns a JSON array of event tags.
         """
         max_results = request_form.get("max_results", self.max_results)
 
@@ -165,6 +227,7 @@ class DiscoverHotVideos(DVMTaskInterface):
             e_tag = Tag.parse(["e", event_id, self.relay_url])
             result_list.append(e_tag.as_vec())
 
+        print(f"[VideoCache] Cached {len(result_list)} videos")
         return json.dumps(result_list)
 
     async def _query_hot_videos(self, limit: int) -> list[dict]:
@@ -349,6 +412,8 @@ def build_dvm(
     dvm_config.LNBITS_INVOICE_KEY = ""  # Free service, no payment required
     dvm_config.LNBITS_ADMIN_KEY = ""
     dvm_config.FIX_COST = 0
+    dvm_config.SCHEDULE_UPDATES_SECONDS = 180  # Refresh cache every 3 minutes
+    dvm_config.SEND_FEEDBACK_EVENTS = False  # Skip "processing" feedback - results are instant from cache
     if nip05:
         dvm_config.NIP05 = nip05
     if lud16:
