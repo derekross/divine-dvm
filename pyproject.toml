@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "divine-dvm"
+version = "0.1.0"
+description = "What's Hot on diVine - A Nostr DVM for discovering trending videos"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [
+    { name = "diVine" }
+]
+keywords = ["nostr", "dvm", "video", "divine"]
+
+dependencies = [
+    "nostr-dvm>=1.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[project.scripts]
+divine-dvm = "divine_dvm.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/divine_dvm"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I"]
