@@ -77,9 +77,88 @@ DIVINE_RELAY=wss://relay.divine.video
 }
 ```
 
-## Production Deployment
+## Running as a System Service
 
-See [PLAN.md](PLAN.md) for systemd, Docker, and PM2 deployment options.
+### Setup
+
+```bash
+# Create a dedicated user (optional but recommended)
+sudo useradd -r -s /bin/false dvm
+
+# Copy project to /opt
+sudo cp -r . /opt/divine-dvm
+sudo chown -R dvm:dvm /opt/divine-dvm
+
+# Create virtual environment and install
+cd /opt/divine-dvm
+sudo -u dvm python -m venv .venv
+sudo -u dvm .venv/bin/pip install -e .
+
+# Configure environment
+sudo cp .env.example .env
+sudo nano .env  # Add your NOSTR_PRIVATE_KEY
+sudo chown dvm:dvm .env
+sudo chmod 600 .env
+```
+
+### Create the Service File
+
+```bash
+sudo nano /etc/systemd/system/divine-dvm.service
+```
+
+```ini
+[Unit]
+Description=What's Hot on diVine DVM
+After=network.target
+
+[Service]
+Type=simple
+User=dvm
+Group=dvm
+WorkingDirectory=/opt/divine-dvm
+ExecStart=/opt/divine-dvm/.venv/bin/python -m divine_dvm.main
+Restart=always
+RestartSec=10
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/opt/divine-dvm
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Enable and Start
+
+```bash
+# Reload systemd
+sudo systemctl daemon-reload
+
+# Enable on boot
+sudo systemctl enable divine-dvm
+
+# Start the service
+sudo systemctl start divine-dvm
+
+# Check status
+sudo systemctl status divine-dvm
+
+# View logs
+sudo journalctl -u divine-dvm -f
+```
+
+### Management Commands
+
+```bash
+sudo systemctl stop divine-dvm      # Stop
+sudo systemctl restart divine-dvm   # Restart
+sudo systemctl status divine-dvm    # Status
+sudo journalctl -u divine-dvm -n 50 # Last 50 log lines
+```
 
 ## License
 
